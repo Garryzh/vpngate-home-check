@@ -137,7 +137,7 @@ def parse_csv(text):
     header = lines[header_idx].lstrip("#").split(",")
     data_lines = lines[header_idx + 1:]
     idx = {}
-    for col in ("hostname", "ip", "countrylong", "countryshort", "openvpn_configdata_base64"):
+    for col in ("hostname", "ip", "speed", "countrylong", "countryshort", "openvpn_configdata_base64"):
         for i, h in enumerate(header):
             if h.strip().lstrip("*").lower() == col:
                 idx[col] = i
@@ -147,7 +147,7 @@ def parse_csv(text):
             if "base64" in h.lower():
                 idx["openvpn_configdata_base64"] = i
                 break
-    pos = {"hostname": idx.get("hostname", 0), "ip": idx.get("ip", 1), "countrylong": idx.get("countrylong", 5), "countryshort": idx.get("countryshort", 6), "openvpn_configdata_base64": idx.get("openvpn_configdata_base64", len(header) - 1)}
+    pos = {"hostname": idx.get("hostname", 0), "ip": idx.get("ip", 1), "speed": idx.get("speed", 4), "countrylong": idx.get("countrylong", 5), "countryshort": idx.get("countryshort", 6), "openvpn_configdata_base64": idx.get("openvpn_configdata_base64", len(header) - 1)}
 
     rows = []
     for ln in data_lines:
@@ -156,7 +156,7 @@ def parse_csv(text):
         host = fields[pos["hostname"]].strip()
         ip = fields[pos["ip"]].strip()
         if not host or not ip: continue
-        rows.append({"host": host, "ip": ip, "country_long": fields[pos["countrylong"]].strip(), "country_short": fields[pos["countryshort"]].strip(), "config_b64": fields[pos["openvpn_configdata_base64"]].strip()})
+        rows.append({"host": host, "ip": ip, "speed": fields[pos["speed"]].strip() if pos["speed"] < len(fields) else "0", "country_long": fields[pos["countrylong"]].strip(), "country_short": fields[pos["countryshort"]].strip(), "config_b64": fields[pos["openvpn_configdata_base64"]].strip()})
     return rows
 
 def parse_mirror_json(data):
@@ -172,7 +172,7 @@ def parse_mirror_json(data):
         host = str(s.get("hostname") or s.get("host") or "").strip()
         ip = str(s.get("ip") or "").strip()
         if not host or not ip: continue
-        rows.append({"host": host, "ip": ip, "country_long": str(s.get("countrylong") or s.get("country_long") or s.get("country") or "").strip(), "country_short": str(s.get("countryshort") or s.get("country_short") or "").strip(), "config_b64": str(s.get("openvpn_configdata_base64") or s.get("config_b64") or "").strip()})
+        rows.append({"host": host, "ip": ip, "speed": str(s.get("speed") or 0), "country_long": str(s.get("countrylong") or s.get("country_long") or s.get("country") or "").strip(), "country_short": str(s.get("countryshort") or s.get("country_short") or "").strip(), "config_b64": str(s.get("openvpn_configdata_base64") or s.get("config_b64") or "").strip()})
     return rows
 
 # ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ def to_sstp_nodes(rows):
         host = r["host"]
         if not host.endswith(".opengw.net"):
             host = f"{host}.opengw.net"
-        nodes.append({"host": host, "port": port, "ip": r["ip"], "country": r["country_long"], "country_code": r["country_short"]})
+        nodes.append({"host": host, "port": port, "ip": r["ip"], "speed": r.get("speed", "0"), "country": r["country_long"], "country_code": r["country_short"], "config_b64": r.get("config_b64", "")})
     return nodes
 
 def dedupe(nodes):
@@ -329,6 +329,21 @@ def build_nodes_text(data):
             lines.append(f"{entry}#{zh}-机房-{i:02d}$sstp://vpn:vpn@{n['host']}:{n['port']}")
     return "\n".join(lines) + "\n"
 
+def build_filtered_csv(data):
+    """Publish the original VPN Gate config for CFnew's OpenVPN parser."""
+    rows = []
+    for n in data.get("available", []):
+        cfg = n.get("config_b64") or ""
+        if not cfg:
+            continue
+        # CFnew reads columns 0, 1, 4, 6 and the final base64 config.
+        rows.append([n.get("host", ""), n.get("ip", ""), "", "", n.get("speed", "0"), "", n.get("country_code", ""), "", "", "", "", "", "", "", cfg])
+    out = io.StringIO(newline="")
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow(["HostName", "IP", "", "", "Speed", "", "CountryShort", "", "", "", "", "", "", "", "OpenVPN_ConfigData_Base64"])
+    writer.writerows(rows)
+    return out.getvalue()
+
 def write_outputs(data):
     os.makedirs(PUBLIC_DIR, exist_ok=True)
     data_path = os.path.join(PUBLIC_DIR, "data.json")
@@ -350,7 +365,11 @@ def write_outputs(data):
     with open(nodes_path, "w", encoding="utf-8") as f:
         f.write(build_nodes_text(data))
 
-    return data_path, html_path, nodes_path
+    csv_path = os.path.join(PUBLIC_DIR, "vpngate-filtered.csv")
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
+        f.write(build_filtered_csv(data))
+
+    return data_path, html_path, nodes_path, csv_path
 
 # ---------------------------------------------------------------------------
 # main
@@ -395,10 +414,11 @@ def main():
     log("RESULT", f"可用节点: {len(success)}")
     log("RESULT", f"国家数量: {data['stats']['countries']}")
 
-    data_path, html_path, nodes_path = write_outputs(data)
+    data_path, html_path, nodes_path, csv_path = write_outputs(data)
     log("WEBSITE", f"生成 {os.path.relpath(data_path, REPO_DIR)}")
     log("WEBSITE", f"生成 {os.path.relpath(html_path, REPO_DIR)}")
     log("WEBSITE", f"生成 {os.path.relpath(nodes_path, REPO_DIR)}")
+    log("WEBSITE", f"生成 {os.path.relpath(csv_path, REPO_DIR)}")
     log("USAGE", f"自动轮换: 把 {NODES_URL} 填入 edgetunnel 后台「自定义优选IP」框 (一次配置, 之后每 30 分钟自动更新)")
     log("WEBSITE", "完成 (GitHub Pages 部署由 workflow 执行)")
 
