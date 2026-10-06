@@ -30,6 +30,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Install OpenVPN client
+        run: sudo apt-get update && sudo apt-get install -y openvpn curl
+
       - name: Get VPN Gate nodes + check via Cloudflare Worker + build page
         run: python vpngate.py
         env:
@@ -38,6 +41,11 @@ jobs:
           NODES_URL: "https://garryzh.github.io/vpngate-home-check/nodes.txt"
           CHECK_CONCURRENCY: "32"
           CHECK_TIMEOUT: "90"
+
+      - name: Verify real OpenVPN tunnel and egress
+        run: sudo -E python openvpn_check.py
+        env:
+          OPENVPN_TIMEOUT: "35"
 
       - name: Ensure GitHub Pages is enabled (one-time auto setup)
         run: |
