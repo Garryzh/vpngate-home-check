@@ -64,6 +64,24 @@ def main():
     import csv
     with (PUBLIC / 'vpngate-filtered.csv').open('w', encoding='utf-8', newline='') as f:
         csv.writer(f, lineterminator='\n').writerows(rows)
+    # 发布可直接交给 OpenVPN GUI 的配置，绕过 Clash 对 OpenVPN outbound 的兼容差异。
+    ovpn_dir = PUBLIC / 'openvpn'
+    ovpn_dir.mkdir(exist_ok=True)
+    for old in ovpn_dir.glob('*.ovpn'):
+        old.unlink()
+    index = []
+    for i, node in enumerate(passed, 1):
+        cfg = base64.b64decode(node['config_b64']).decode('utf-8', 'replace')
+        cfg = cfg.replace('auth-user-pass', '<auth-user-pass>\nvpn\nvpn\n</auth-user-pass>')
+        name = f"{i:02d}-{node.get('country_code','XX')}-{node.get('ip','node')}.ovpn"
+        (ovpn_dir / name).write_text(cfg, encoding='utf-8')
+        index.append({'name': name, 'host': node.get('host'), 'ip': node.get('ip'),
+                      'country': node.get('country_code'), 'exit_ip': node.get('openvpn_exit_ip')})
+    (ovpn_dir / 'index.json').write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding='utf-8')
+    if passed:
+        first = base64.b64decode(passed[0]['config_b64']).decode('utf-8', 'replace')
+        first = first.replace('auth-user-pass', '<auth-user-pass>\nvpn\nvpn\n</auth-user-pass>')
+        (PUBLIC / 'openvpn-best.ovpn').write_text(first, encoding='utf-8')
     if not passed:
         raise SystemExit('No OpenVPN node passed real handshake + tun0 egress checks')
 
